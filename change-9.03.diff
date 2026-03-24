@@ -647,52 +647,6 @@ diff -p ../../tcl-9-0-3/generic/tclCompile.c ../generic/tclCompile.c
   
       /*
        * Compilation succeeded. Add a "done" instruction at the end.
-*************** CompileCommandTokens(
-*** 2071,2076 ****
---- 2074,2080 ----
-      /* Do we know the command word? */
-      Tcl_IncrRefCount(cmdObj);
-      tokenPtr = parsePtr->tokenPtr;
-+    	
-      cmdKnown = TclWordKnownAtCompileTime(tokenPtr, cmdObj);
-  
-      /* Is this a command we should (try to) compile with a compileProc ? */
-*************** CompileCommandTokens(
-*** 2116,2123 ****
-      }
-  
-      Tcl_DecrRefCount(cmdObj);
-- 
-      TclEmitOpcode(INST_POP, envPtr);
-      EnterCmdExtentData(envPtr, cmdIdx,
-  	    parsePtr->term - parsePtr->commandStart,
-  	    (envPtr->codeNext-envPtr->codeStart) - startCodeOffset);
---- 2120,2127 ----
-      }
-  
-      Tcl_DecrRefCount(cmdObj);
-      TclEmitOpcode(INST_POP, envPtr);
-+   
-      EnterCmdExtentData(envPtr, cmdIdx,
-  	    parsePtr->term - parsePtr->commandStart,
-  	    (envPtr->codeNext-envPtr->codeStart) - startCodeOffset);
-*************** CompileCommandTokens(
-*** 2133,2139 ****
-      Tcl_Free(eclPtr->loc[wlineat].next);
-      eclPtr->loc[wlineat].line = wlines;
-      eclPtr->loc[wlineat].next = NULL;
-! 
-      TclCheckStackDepth(depth, envPtr);
-      return cmdIdx;
-  }
---- 2137,2143 ----
-      Tcl_Free(eclPtr->loc[wlineat].next);
-      eclPtr->loc[wlineat].line = wlines;
-      eclPtr->loc[wlineat].next = NULL;
-!    cleanup :
-      TclCheckStackDepth(depth, envPtr);
-      return cmdIdx;
-  }
 *************** TclCompileScript(
 *** 2274,2281 ****
   	     * (considering interp recursionlimit).
