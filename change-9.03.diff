@@ -733,25 +733,6 @@ diff -p ../../tcl-9-0-3/generic/tclCompile.c ../generic/tclCompile.c
   	int literal = TclRegisterDStringLiteral(envPtr, &textBuffer);
   
   	TclEmitPush(literal, envPtr);
-*************** TclCompileCmdWord(
-*** 2639,2646 ****
-  				 * Must be at least 1. */
-      CompileEnv *envPtr)		/* Holds the resulting instructions. */
-  {
-! 
-!     if ((count == 1) && (tokenPtr->type == TCL_TOKEN_TEXT)) {
-  	/*
-  	 * The common case that there is a single text token. Compile it
-  	 * into an inline sequence of instructions.
---- 2666,2672 ----
-  				 * Must be at least 1. */
-      CompileEnv *envPtr)		/* Holds the resulting instructions. */
-  {
-!      if ((count == 1) && (tokenPtr->type == TCL_TOKEN_TEXT)) {
-  	/*
-  	 * The common case that there is a single text token. Compile it
-  	 * into an inline sequence of instructions.
-Only in ../generic: tclInterp.c~
 diff -p ../../tcl-9-0-3/generic/tclParse.c ../generic/tclParse.c
 *** ../../tcl-9-0-3/generic/tclParse.c	Mon Mar 23 11:29:49 2026
 --- ../generic/tclParse.c	Mon Mar 23 12:23:49 2026
