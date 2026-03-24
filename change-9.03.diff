@@ -60,11 +60,11 @@ diff -p ../../tcl-9-0-3/generic/tclCompCmds.c ../generic/tclCompCmds.c
   
   		elemTokenPtr = (Tcl_Token *)TclStackAlloc(interp, sizeof(Tcl_Token));
   		allocedTokens = 1;
-! 		if (*elName == '(' && *(last--) == ')' ) {
-!  		    elemTokenPtr->type = TCL_TOKEN_SUB_EXPR;
-!  		} else {
-! 		    elemTokenPtr->type = TCL_TOKEN_TEXT;
-! 		}
++ 		if (*elName == '(' && *(last--) == ')' ) {
++  		    elemTokenPtr->type = TCL_TOKEN_SUB_EXPR;
++  		} else {
++ 		    elemTokenPtr->type = TCL_TOKEN_TEXT;
++ 		}
   		elemTokenPtr->start = elName;
   		elemTokenPtr->size = elNameLen;
   		elemTokenPtr->numComponents = 0;
