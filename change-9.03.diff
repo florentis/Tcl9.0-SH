@@ -1,0 +1,900 @@
+Files ../../tcl-9-0-3/generic/tclBasic.c and ../generic/tclBasic.c differ
+Files ../../tcl-9-0-3/generic/tclCompCmds.c and ../generic/tclCompCmds.c differ
+Files ../../tcl-9-0-3/generic/tclCompExpr.c and ../generic/tclCompExpr.c differ
+Files ../../tcl-9-0-3/generic/tclCompile.c and ../generic/tclCompile.c differ
+Files ../../tcl-9-0-3/generic/tclParse.c and ../generic/tclParse.c differ
+Files ../../tcl-9-0-3/generic/tclVar.c and ../generic/tclVar.c differ
+
+diff -p ../../tcl-9-0-3/generic/tclBasic.c ../generic/tclBasic.c
+*** ../../tcl-9-0-3/generic/tclBasic.c	Mon Mar 23 11:29:47 2026
+--- ../generic/tclBasic.c	Tue Mar 24 00:44:57 2026
+*************** static const BuiltinFuncDef BuiltinFuncT
+*** 512,517 ****
+--- 512,518 ----
+      { "exp",	ExprUnaryFunc,	exp			},
+      { "floor",	ExprFloorFunc,	NULL			},
+      { "fmod",	ExprBinaryFunc,	BINARY_TYPECAST(fmod)	},
++     { "for", Tcl_ForObjCmd, NULL},
+      { "hypot",	ExprBinaryFunc,	BINARY_TYPECAST(hypot)	},
+      { "int",	ExprIntFunc,	NULL			},
+      { "isfinite", ExprIsFiniteFunc, NULL		},
+*************** static const BuiltinFuncDef BuiltinFuncT
+*** 521,526 ****
+--- 522,528 ----
+      { "isqrt",	ExprIsqrtFunc,	NULL			},
+      { "issubnormal", ExprIsSubnormalFunc, NULL,		},
+      { "isunordered", ExprIsUnorderedFunc, NULL,		},
++     { "list",           Tcl_ListObjCmd,            NULL                     },
+      { "log",	ExprUnaryFunc,	log			},
+      { "log10",	ExprUnaryFunc,	log10			},
+      { "max",	ExprMaxFunc,	NULL			},
+*************** TclNREvalObjEx(
+*** 6277,6283 ****
+--- 6279,6291 ----
+  	Tcl_IncrRefCount(objPtr);
+  
+  	script = TclGetStringFromObj(objPtr, &numSrcBytes);
++         
++         if (script[0] == '(' && script[numSrcBytes-1] ==')') {
++             Tcl_Obj * newExprObj;
++             result = Tcl_ExprObj(interp, objPtr, &newExprObj);
++         } else {
+  	result = Tcl_EvalEx(interp, script, numSrcBytes, flags);
++         }
+  
+  	TclDecrRefCount(objPtr);
+  
+diff -p ../../tcl-9-0-3/generic/tclCompCmds.c ../generic/tclCompCmds.c
+*** ../../tcl-9-0-3/generic/tclCompCmds.c	Mon Mar 23 11:29:47 2026
+--- ../generic/tclCompCmds.c	Mon Mar 23 13:21:46 2026
+*************** TclPushVarName(
+*** 3550,3556 ****
+  
+  		elemTokenPtr = (Tcl_Token *)TclStackAlloc(interp, sizeof(Tcl_Token));
+  		allocedTokens = 1;
+! 		elemTokenPtr->type = TCL_TOKEN_TEXT;
+  		elemTokenPtr->start = elName;
+  		elemTokenPtr->size = elNameLen;
+  		elemTokenPtr->numComponents = 0;
+--- 3550,3560 ----
+  
+  		elemTokenPtr = (Tcl_Token *)TclStackAlloc(interp, sizeof(Tcl_Token));
+  		allocedTokens = 1;
+! 		if (*elName == '(' && *(last--) == ')' ) {
+!  		    elemTokenPtr->type = TCL_TOKEN_SUB_EXPR;
+!  		} else {
+! 		    elemTokenPtr->type = TCL_TOKEN_TEXT;
+! 		}
+  		elemTokenPtr->start = elName;
+  		elemTokenPtr->size = elNameLen;
+  		elemTokenPtr->numComponents = 0;
+diff -p ../../tcl-9-0-3/generic/tclCompExpr.c ../generic/tclCompExpr.c
+*** ../../tcl-9-0-3/generic/tclCompExpr.c	Mon Mar 23 11:29:47 2026
+--- ../generic/tclCompExpr.c	Tue Mar 24 12:18:37 2026
+*************** enum LexemeCodes {
+*** 212,217 ****
+--- 212,218 ----
+  				 * CLOSE_PAREN below. */
+      NOT = UNARY | 6,
+      BIT_NOT = UNARY | 7,
++     NULL_FUNC = UNARY | 8,          /* Ambigous : can result in no_func or in function list */
+  
+      /* Binary operator lexemes */
+  
+*************** enum LexemeCodes {
+*** 274,285 ****
+      STR_GT = BINARY | 29,
+      STR_LEQ = BINARY | 30,
+      STR_GEQ = BINARY | 31,
+!     END = BINARY | 32		/* This lexeme represents the end of the
+  				 * string being parsed. Treating it as a
+  				 * binary operator follows the same logic as
+  				 * the CLOSE_PAREN lexeme and END pairs with
+  				 * START, in the same way that CLOSE_PAREN
+  				 * pairs with OPEN_PAREN. */
+  };
+  
+  /*
+--- 275,289 ----
+      STR_GT = BINARY | 29,
+      STR_LEQ = BINARY | 30,
+      STR_GEQ = BINARY | 31,
+!     END = BINARY | 32,		/* This lexeme represents the end of the
+  				 * string being parsed. Treating it as a
+  				 * binary operator follows the same logic as
+  				 * the CLOSE_PAREN lexeme and END pairs with
+  				 * START, in the same way that CLOSE_PAREN
+  				 * pairs with OPEN_PAREN. */
++     SEPARATOR = BINARY | 33,
++     ASSIGN = BINARY | 34               /* ASSIGN, like EXPON is right associative, 
++ 				  * and this distinction is coded directly in ParseExpr */
+  };
+  
+  /*
+*************** enum Precedence {
+*** 297,302 ****
+--- 301,308 ----
+      PREC_CLOSE_PAREN,	/* ")" */
+      PREC_OPEN_PAREN,	/* "(" */
+      PREC_COMMA,		/* "," */
++     PREC_SEPARATOR,        /* ";" */
++     PREC_ASSIGN,              /* "=" */
+      PREC_CONDITIONAL,	/* "?", ":" */
+      PREC_OR,		/* "||" */
+      PREC_AND,		/* "&&" */
+*************** enum Precedence {
+*** 309,315 ****
+      PREC_ADD,		/* "+", "-" */
+      PREC_MULT,		/* "*", "/", "%" */
+      PREC_EXPON,		/* "**" */
+!     PREC_UNARY		/* "+", "-", FUNCTION, "!", "~" */
+  };
+  
+  /*
+--- 315,321 ----
+      PREC_ADD,		/* "+", "-" */
+      PREC_MULT,		/* "*", "/", "%" */
+      PREC_EXPON,		/* "**" */
+!     PREC_UNARY		/* "+", "-", FUNCTION, "!", "~" "NULL_FUNC" */
+  };
+  
+  /*
+*************** static const unsigned char prec[] = {
+*** 358,365 ****
+      PREC_COMPARE,	/* STR_LEQ */
+      PREC_COMPARE,	/* STR_GEQ */
+      PREC_END,		/* END */
+      /* Expansion room for more binary operators */
+!     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      /* Unary operator lexemes */
+      PREC_UNARY,		/* UNARY_PLUS */
+--- 364,373 ----
+      PREC_COMPARE,	/* STR_LEQ */
+      PREC_COMPARE,	/* STR_GEQ */
+      PREC_END,		/* END */
++     PREC_SEPARATOR,      /* SEPARATOR */
++     PREC_ASSIGN,            /* ASSIGN */
+      /* Expansion room for more binary operators */
+!     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      /* Unary operator lexemes */
+      PREC_UNARY,		/* UNARY_PLUS */
+*************** static const unsigned char prec[] = {
+*** 369,374 ****
+--- 377,383 ----
+      PREC_OPEN_PAREN,	/* OPEN_PAREN */
+      PREC_UNARY,		/* NOT*/
+      PREC_UNARY,		/* BIT_NOT*/
++     PREC_UNARY               /*NULL_FUNC */
+  };
+  
+  /*
+*************** static const unsigned char instruction[]
+*** 415,422 ****
+      INST_STR_LE,	/* STR_LEQ */
+      INST_STR_GE,	/* STR_GEQ */
+      0,			/* END */
+      /* Expansion room for more binary operators */
+!     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      /* Unary operator lexemes */
+      INST_UPLUS,		/* UNARY_PLUS */
+--- 424,433 ----
+      INST_STR_LE,	/* STR_LEQ */
+      INST_STR_GE,	/* STR_GEQ */
+      0,			/* END */
++     0,                               /* SEPARATOR */
++     0,                               /* ASSIGN */
+      /* Expansion room for more binary operators */
+!     0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+      /* Unary operator lexemes */
+      INST_UPLUS,		/* UNARY_PLUS */
+*************** static const unsigned char instruction[]
+*** 426,431 ****
+--- 437,443 ----
+      0,			/* OPEN_PAREN */
+      INST_LNOT,		/* NOT*/
+      INST_BITNOT,	/* BIT_NOT*/
++     0                  /* NULL_FUNC */
+  };
+  
+  /*
+*************** static const unsigned char Lexeme[] = {
+*** 459,467 ****
+  	COMMA		/* , */,	MINUS		/* - */,
+  	0		/* . */,	DIVIDE		/* / */,
+  	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,			/* 0-9 */
+! 	COLON		/* : */,	INVALID		/* ; */,
+  	0		/* < or << or <= */,
+! 	0		/* == or INVALID */,
+  	0		/* > or >> or >= */,
+  	QUESTION	/* ? */,	INVALID		/* @ */,
+  	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,		/* A-M */
+--- 471,479 ----
+  	COMMA		/* , */,	MINUS		/* - */,
+  	0		/* . */,	DIVIDE		/* / */,
+  	0, 0, 0, 0, 0, 0, 0, 0, 0, 0,			/* 0-9 */
+! 	COLON		/* : */,	SEPARATOR		/* ; */,
+  	0		/* < or << or <= */,
+! 	0		/* == or = */,
+  	0		/* > or >> or >= */,
+  	QUESTION	/* ? */,	INVALID		/* @ */,
+  	0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,		/* A-M */
+*************** ParseExpr(
+*** 618,623 ****
+--- 630,649 ----
+  				 * error message readable, we impose this
+  				 * limit on the substring size we extract. */
+  
++     int nb_paren=0;
++     int substExpressionContext=0;
++     Tcl_Size originalLength=numBytes;
++         
++     if(start[0] == '[' && start[1] == '(' ) {
++ 	// Expression substitution context
++ 	substExpressionContext=1;
++ 	start++; //skip the open bracket '[', keep the parenthese 
++ 	numBytes--;
++     }
++     /* create the list func name object*/
++     Tcl_Obj *listName;
++     TclNewLiteralStringObj(listName, "list");
++ 
+      TclParseInit(interp, start, numBytes, parsePtr);
+  
+      nodes = (OpNode *)Tcl_AttemptAlloc(nodesAvailable * sizeof(OpNode));
+*************** ParseExpr(
+*** 658,664 ****
+  	 * space for one if required.
+  	 */
+  
+! 	if (nodesUsed >= nodesAvailable) {
+  	    unsigned int size = nodesUsed * 2;
+  	    OpNode *newPtr = NULL;
+  
+--- 684,690 ----
+  	 * space for one if required.
+  	 */
+  
+! 	if (nodesUsed >= nodesAvailable-1) {
+  	    unsigned int size = nodesUsed * 2;
+  	    OpNode *newPtr = NULL;
+  
+*************** ParseExpr(
+*** 735,740 ****
+--- 761,774 ----
+  		    Tcl_ListObjAppendElement(NULL, funcList, literal);
+  		} else if (Tcl_GetBooleanFromObj(NULL,literal,&b) == TCL_OK) {
+  		    lexeme = BOOL_LIT;
++ 		} else if (literal && start[scanned+TclParseAllWhiteSpace(
++ 				  start+scanned, numBytes-scanned)] == '=') {
++ 		    /* We accept barewords on variable assignement */
++ 		    Tcl_ListObjAppendElement(NULL, litList, literal);
++ 		    complete = lastParsed = OT_LITERAL;
++ 		    start += scanned;
++ 		    numBytes -= scanned;
++ 		    continue;
+  		} else {
+  		    /*
+  		     * Tricky case: see test expr-62.10
+*************** ParseExpr(
+*** 941,949 ****
+  	    case SCRIPT: {
+  		Tcl_Parse *nestedPtr = (Tcl_Parse *)
+  			TclStackAlloc(interp, sizeof(Tcl_Parse));
+  
+! 		tokenPtr = parsePtr->tokenPtr + parsePtr->numTokens;
+! 		tokenPtr->type = TCL_TOKEN_COMMAND;
+  		tokenPtr->start = start;
+  		tokenPtr->numComponents = 0;
+  
+--- 975,989 ----
+  	    case SCRIPT: {
+  		Tcl_Parse *nestedPtr = (Tcl_Parse *)
+  			TclStackAlloc(interp, sizeof(Tcl_Parse));
++ 		
++ 		tokenPtr = parsePtr->tokenPtr + parsePtr->numTokens;		
+  
+! 		int nestSubstExprShorthand = 0;
+! 		if (numBytes > 1 && start[1] == '(') {
+! 		    tokenPtr->type = TCL_TOKEN_SUB_EXPR;
+! 		} else {
+! 		    tokenPtr->type = TCL_TOKEN_COMMAND;
+! 		}
+  		tokenPtr->start = start;
+  		tokenPtr->numComponents = 0;
+  
+*************** ParseExpr(
+*** 958,964 ****
+  			parsePtr->incomplete = nestedPtr->incomplete;
+  			break;
+  		    }
+! 		    start = nestedPtr->commandStart + nestedPtr->commandSize;
+  		    Tcl_FreeParse(nestedPtr);
+  		    if ((nestedPtr->term < end) && (nestedPtr->term[0] == ']')
+  			    && !nestedPtr->incomplete) {
+--- 998,1008 ----
+  			parsePtr->incomplete = nestedPtr->incomplete;
+  			break;
+  		    }
+! 		    if (nestSubstExprShorthand == 1) {			    
+! 			start = nestedPtr->commandStart + nestedPtr->commandSize-3;
+! 		    } else {
+! 			start = nestedPtr->commandStart + nestedPtr->commandSize;
+! 		    }
+  		    Tcl_FreeParse(nestedPtr);
+  		    if ((nestedPtr->term < end) && (nestedPtr->term[0] == ']')
+  			    && !nestedPtr->incomplete) {
+*************** ParseExpr(
+*** 1043,1049 ****
+  	} /* case LEAF */
+  
+  	case UNARY:
+! 
+  	    /*
+  	     * A unary operator appearing just after something that's not an
+  	     * operator is a syntax error -- something trying to be the left
+--- 1087,1097 ----
+  	} /* case LEAF */
+  
+  	case UNARY:
+! 	    if (substExpressionContext == 1) {
+! 		if (start[0]== '(') {
+! 		    nb_paren++;    
+! 		}
+! 	    }
+  	    /*
+  	     * A unary operator appearing just after something that's not an
+  	     * operator is a syntax error -- something trying to be the left
+*************** ParseExpr(
+*** 1058,1063 ****
+--- 1106,1123 ----
+  		goto error;
+  	    }
+  
++ 	     if (lexeme == OPEN_PAREN && nodePtr[-1].lexeme != FUNCTION ) {
++ 		 /* Native list handling */
++ 		nodePtr->lexeme = NULL_FUNC;
++ 		nodePtr->precedence = prec[NULL_FUNC];
++ 		nodePtr->mark = MARK_RIGHT;
++ 		nodePtr->constant = 0; 
++ 		nodePtr->p.prev = incomplete;
++ 		incomplete = lastParsed = nodesUsed;
++ 		Tcl_ListObjAppendElement(NULL, funcList, listName); 
++ 		nodesUsed++;
++ 		nodePtr = nodes + nodesUsed;
++ 	    }
+  	    /*
+  	     * Create an OpNode for the unary operator.
+  	     */
+*************** ParseExpr(
+*** 1073,1079 ****
+  	     * expression, so long as the argument is a constant expression.
+  	     */
+  
+! 	    nodePtr->constant = (lexeme != FUNCTION);
+  
+  	    /*
+  	     * This unary operator is a new incomplete tree, so push it onto
+--- 1133,1139 ----
+  	     * expression, so long as the argument is a constant expression.
+  	     */
+  
+! 	    nodePtr->constant = !(lexeme == FUNCTION || lexeme == NULL_FUNC) ;
+  
+  	    /*
+  	     * This unary operator is a new incomplete tree, so push it onto
+*************** ParseExpr(
+*** 1090,1095 ****
+--- 1150,1167 ----
+  	    OpNode *incompletePtr;
+  	    unsigned char precedence = prec[lexeme];
+  
++ 	    if (substExpressionContext == 1) {
++ 		if (start[0] == ')') {
++ 		    nb_paren--;
++ 		    if (numBytes >= 1 && nb_paren == 0 && start[1] ==']') {
++ 			//// End of expr substitution
++ 			parsePtr->commandSize = originalLength - numBytes;
++ 			numBytes=0; // make ParseLexeme add a END node
++ 		    }					   
++ 		}		
++ 	    }
++ 
++ 
+  	    /*
+  	     * A binary operator appearing just after another operator is a
+  	     * syntax error -- one of the two operators is missing an operand.
+*************** ParseExpr(
+*** 1201,1206 ****
+--- 1273,1283 ----
+  		    if (lexeme == EXPON) {
+  			break;
+  		    }
++ 		    
++ 		    /* Right association rules for assignment. */
++ 		    if (lexeme == ASSIGN) {
++ 			break;
++ 		    }
+  
+  		    /*
+  		     * Special association rules for the conditional
+*************** ParseExpr(
+*** 1279,1284 ****
+--- 1356,1370 ----
+  			|| (incompletePtr->lexeme == FUNCTION)) {
+  		    nodes[complete].constant = incompletePtr->constant;
+  		}
++ 		
++ 		/*
++ 		 * We declare all ASSIGN operators to be non-constant
++ 		 * expressions because we do not want to optimize their
++ 		 * variable-setting side effects out of existence.
++ 		 */
++ 		if (incompletePtr->lexeme == ASSIGN) {
++ 		    incompletePtr->constant = 0;
++ 		}
+  
+  		if (incompletePtr->lexeme == START) {
+  		    /*
+*************** ParseExpr(
+*** 1322,1331 ****
+  	    if (lexeme == COMMA) {
+  		if  ((incompletePtr->lexeme != OPEN_PAREN)
+  			|| (incompletePtr[-1].lexeme != FUNCTION)) {
+! 		    TclNewLiteralStringObj(msg,
+! 			    "unexpected \",\" outside function argument list");
+! 		    errCode = "SURPRISE";
+! 		    goto error;
+  		}
+  	    }
+  
+--- 1408,1421 ----
+  	    if (lexeme == COMMA) {
+  		if  ((incompletePtr->lexeme != OPEN_PAREN)
+  			|| (incompletePtr[-1].lexeme != FUNCTION)) {
+! 		    if (incompletePtr[-1].lexeme == NULL_FUNC) {
+! 			incompletePtr[-1].lexeme = FUNCTION;
+! 		    } else {
+! 			TclNewLiteralStringObj(msg,
+! 					       "unexpected \",\" outside function argument list");
+! 			errCode = "SURPRISE";
+! 			goto error;
+! 		    }
+  		}
+  	    }
+  
+*************** Tcl_ParseExpr(
+*** 1874,1881 ****
+  
+      TclParseInit(interp, start, numBytes, parsePtr);
+      if (code == TCL_OK) {
+! 	ConvertTreeToTokens(start, numBytes,
+! 		opTree, exprParsePtr->tokenPtr, parsePtr);
+      } else {
+  	parsePtr->term = exprParsePtr->term;
+  	parsePtr->errorType = exprParsePtr->errorType;
+--- 1964,1976 ----
+  
+      TclParseInit(interp, start, numBytes, parsePtr);
+      if (code == TCL_OK) {
+! 	if(numBytes> 1 && start[0] == '[' && start[1] == '(' ) {
+! 	    // Expression Substitution Context : transfert the command size to parseToken.
+! 	    parsePtr->commandSize = exprParsePtr->commandSize;
+! 	} else {
+! 	    ConvertTreeToTokens(start, numBytes,
+! 				opTree, exprParsePtr->tokenPtr, parsePtr);
+! 	}
+      } else {
+  	parsePtr->term = exprParsePtr->term;
+  	parsePtr->errorType = exprParsePtr->errorType;
+*************** ParseLexeme(
+*** 1918,1924 ****
+      Tcl_Obj *literal = NULL;
+      unsigned char byte;
+  
+!     if (numBytes == 0) {
+  	*lexemePtr = END;
+  	return 0;
+      }
+--- 2013,2019 ----
+      Tcl_Obj *literal = NULL;
+      unsigned char byte;
+  
+!     if (numBytes <= 0) {
+  	*lexemePtr = END;
+  	return 0;
+      }
+*************** ParseLexeme(
+*** 1954,1960 ****
+  	    *lexemePtr = EQUAL;
+  	    return 2;
+  	}
+! 	*lexemePtr = INCOMPLETE;
+  	return 1;
+  
+      case '!':
+--- 2049,2055 ----
+  	    *lexemePtr = EQUAL;
+  	    return 2;
+  	}
+! 	*lexemePtr = ASSIGN;
+  	return 1;
+  
+      case '!':
+*************** CompileExprTree(
+*** 2358,2363 ****
+--- 2453,2461 ----
+  		numWords = 2;	/* Command plus one argument */
+  		break;
+  	    }
++ 	    case NULL_FUNC:
++ 		funcObjv++;
++ 		break;
+  	    case QUESTION:
+  		newJump = (JumpList *)TclStackAlloc(interp, sizeof(JumpList));
+  		newJump->next = jumpPtr;
+*************** CompileExprTree(
+*** 2384,2389 ****
+--- 2482,2490 ----
+  		TclEmitForwardJump(envPtr, (nodePtr->lexeme == AND)
+  			?  TCL_FALSE_JUMP : TCL_TRUE_JUMP, &jumpPtr->jump);
+  		break;
++ 	    case SEPARATOR :
++ 		TclEmitOpcode(INST_POP, envPtr);
++ 		break;
+  	    }
+  	} else {
+  	    int pc1, pc2, target;
+*************** CompileExprTree(
+*** 2395,2410 ****
+  		    TclEmitOpcode(INST_TRY_CVT_TO_NUMERIC, envPtr);
+  		}
+  		break;
+  	    case OPEN_PAREN:
+- 
+  		/* do nothing */
+  		break;
+  	    case FUNCTION:
+  		/*
+  		 * Use the numWords count we've kept to invoke the function
+  		 * command with the correct number of arguments.
+  		 */
+- 
+  		if (numWords < 255) {
+  		    TclEmitInvoke(envPtr, INST_INVOKE_STK1, numWords);
+  		} else {
+--- 2496,2516 ----
+  		    TclEmitOpcode(INST_TRY_CVT_TO_NUMERIC, envPtr);
+  		}
+  		break;
++ 	    case ASSIGN:
++ 		TclEmitOpcode(INST_STORE_STK, envPtr);
++ 		break;
++ 	    case NULL_FUNC:
+  	    case OPEN_PAREN:
+  		/* do nothing */
+  		break;
++ 	    case SEPARATOR:
++ 		convert = 0; 
++ 		break;
+  	    case FUNCTION:
+  		/*
+  		 * Use the numWords count we've kept to invoke the function
+  		 * command with the correct number of arguments.
+  		 */
+  		if (numWords < 255) {
+  		    TclEmitInvoke(envPtr, INST_INVOKE_STK1, numWords);
+  		} else {
+*************** CompileExprTree(
+*** 2416,2422 ****
+  		 */
+  
+  		numWords = nodePtr->left;
+! 		convert = 1;
+  		break;
+  	    case COMMA:
+  		/*
+--- 2522,2533 ----
+  		 */
+  
+  		numWords = nodePtr->left;
+! 		
+! 		if (nodePtr - 1 == rootPtr ) {
+! 		    convert = 0;
+! 		} else {
+! 		    convert = 1;
+! 		}
+  		break;
+  	    case COMMA:
+  		/*
+*************** CompileExprTree(
+*** 2492,2497 ****
+--- 2603,2611 ----
+  	case OT_LITERAL: {
+  	    Tcl_Obj *const *litObjv = *litObjvPtr;
+  	    Tcl_Obj *literal = *litObjv;
++ 	    if ( nodePtr->lexeme == NUMBER) {
++ 		    convert =0;
++ 	    }
+  
+  	    if (optimize) {
+  		Tcl_Size length;
+diff -p ../../tcl-9-0-3/generic/tclCompile.c ../generic/tclCompile.c
+*** ../../tcl-9-0-3/generic/tclCompile.c	Mon Mar 23 11:29:47 2026
+--- ../generic/tclCompile.c	Tue Mar 24 00:59:01 2026
+*************** TclSetByteCodeFromAny(
+*** 825,832 ****
+      if (clLocPtr) {
+  	compEnv.clNext = &clLocPtr->loc[0];
+      }
+! 
+!     TclCompileScript(interp, stringPtr, length, &compEnv);
+  
+      /*
+       * Compilation succeeded. Add a "done" instruction at the end.
+--- 825,835 ----
+      if (clLocPtr) {
+  	compEnv.clNext = &clLocPtr->loc[0];
+      }
+!     if (stringPtr[0] == '(' && stringPtr[length-1] == ')') {
+! 	TclCompileExpr(interp, &stringPtr[1], length-2, &compEnv, 0);
+!     } else {
+! 	TclCompileScript(interp, stringPtr, length, &compEnv);
+!     }
+  
+      /*
+       * Compilation succeeded. Add a "done" instruction at the end.
+*************** CompileCommandTokens(
+*** 2071,2076 ****
+--- 2074,2080 ----
+      /* Do we know the command word? */
+      Tcl_IncrRefCount(cmdObj);
+      tokenPtr = parsePtr->tokenPtr;
++    	
+      cmdKnown = TclWordKnownAtCompileTime(tokenPtr, cmdObj);
+  
+      /* Is this a command we should (try to) compile with a compileProc ? */
+*************** CompileCommandTokens(
+*** 2116,2123 ****
+      }
+  
+      Tcl_DecrRefCount(cmdObj);
+- 
+      TclEmitOpcode(INST_POP, envPtr);
+      EnterCmdExtentData(envPtr, cmdIdx,
+  	    parsePtr->term - parsePtr->commandStart,
+  	    (envPtr->codeNext-envPtr->codeStart) - startCodeOffset);
+--- 2120,2127 ----
+      }
+  
+      Tcl_DecrRefCount(cmdObj);
+      TclEmitOpcode(INST_POP, envPtr);
++   
+      EnterCmdExtentData(envPtr, cmdIdx,
+  	    parsePtr->term - parsePtr->commandStart,
+  	    (envPtr->codeNext-envPtr->codeStart) - startCodeOffset);
+*************** CompileCommandTokens(
+*** 2133,2139 ****
+      Tcl_Free(eclPtr->loc[wlineat].next);
+      eclPtr->loc[wlineat].line = wlines;
+      eclPtr->loc[wlineat].next = NULL;
+! 
+      TclCheckStackDepth(depth, envPtr);
+      return cmdIdx;
+  }
+--- 2137,2143 ----
+      Tcl_Free(eclPtr->loc[wlineat].next);
+      eclPtr->loc[wlineat].line = wlines;
+      eclPtr->loc[wlineat].next = NULL;
+!    cleanup :
+      TclCheckStackDepth(depth, envPtr);
+      return cmdIdx;
+  }
+*************** TclCompileScript(
+*** 2274,2281 ****
+  	     * (considering interp recursionlimit).
+  	     */
+  	    iPtr->numLevels++;
+! 
+! 	    lastCmdIdx = CompileCommandTokens(interp, parsePtr, envPtr);
+  
+  	    iPtr->numLevels--;
+  
+--- 2278,2292 ----
+  	     * (considering interp recursionlimit).
+  	     */
+  	    iPtr->numLevels++;
+! 	    if (parsePtr->tokenPtr[0].type == TCL_TOKEN_SUB_EXPR) {
+! 		// math mode
+! 		TclCompileExpr(interp, &parsePtr->tokenPtr[1].start[0], parsePtr->tokenPtr[1].size, envPtr, true);
+! 		TclEmitOpcode(INST_POP, envPtr);
+! 		lastCmdIdx=envPtr->numCommands;
+! 		numBytes=0;
+! 	    } else {
+! 		lastCmdIdx = CompileCommandTokens(interp, parsePtr, envPtr);
+! 	    }
+  
+  	    iPtr->numLevels--;
+  
+*************** TclCompileTokens(
+*** 2431,2437 ****
+--- 2442,2450 ----
+      int isLiteral;
+      Tcl_Size maxNumCL, numCL;
+      Tcl_Size *clPosition = NULL;
++     int twoCharsSymbol = 0; //used in expr subst context
+      int depth = TclGetStackDepth(envPtr);
++     
+  
+      /*
+       * If this is actually a literal, handle continuation lines by
+*************** TclCompileTokens(
+*** 2534,2540 ****
+  	    envPtr->line -= adjust;
+  	    numObjsToConcat++;
+  	    break;
+! 
+  	case TCL_TOKEN_VARIABLE:
+  	    /*
+  	     * Push any accumulated chars appearing before the $<var>.
+--- 2547,2567 ----
+  	    envPtr->line -= adjust;
+  	    numObjsToConcat++;
+  	    break;
+! 	case TCL_TOKEN_SUB_EXPR :
+! 	    if (Tcl_DStringLength(&textBuffer) > 1) {
+! 		int literal;
+! 		literal = TclRegisterDStringLiteral(envPtr, &textBuffer);
+! 		TclEmitPush(literal, envPtr);
+! 		numObjsToConcat++;
+! 		Tcl_DStringFree(&textBuffer);
+! 	    }
+! 	    twoCharsSymbol=1;
+! 	    envPtr->line += adjust;
+! 	    TclCompileExpr(interp,  tokenPtr->start+1, tokenPtr->size-2, envPtr, 0);
+! 	    envPtr->line -= adjust;
+! 	    numObjsToConcat++;	    
+! 	    break;
+! 	    
+  	case TCL_TOKEN_VARIABLE:
+  	    /*
+  	     * Push any accumulated chars appearing before the $<var>.
+*************** TclCompileTokens(
+*** 2565,2571 ****
+       * Push any accumulated characters appearing at the end.
+       */
+  
+!     if (Tcl_DStringLength(&textBuffer) > 0) {
+  	int literal = TclRegisterDStringLiteral(envPtr, &textBuffer);
+  
+  	TclEmitPush(literal, envPtr);
+--- 2592,2598 ----
+       * Push any accumulated characters appearing at the end.
+       */
+  
+!     if (Tcl_DStringLength(&textBuffer) > 0 &&  twoCharsSymbol != 1) {
+  	int literal = TclRegisterDStringLiteral(envPtr, &textBuffer);
+  
+  	TclEmitPush(literal, envPtr);
+*************** TclCompileCmdWord(
+*** 2639,2646 ****
+  				 * Must be at least 1. */
+      CompileEnv *envPtr)		/* Holds the resulting instructions. */
+  {
+! 
+!     if ((count == 1) && (tokenPtr->type == TCL_TOKEN_TEXT)) {
+  	/*
+  	 * The common case that there is a single text token. Compile it
+  	 * into an inline sequence of instructions.
+--- 2666,2672 ----
+  				 * Must be at least 1. */
+      CompileEnv *envPtr)		/* Holds the resulting instructions. */
+  {
+!      if ((count == 1) && (tokenPtr->type == TCL_TOKEN_TEXT)) {
+  	/*
+  	 * The common case that there is a single text token. Compile it
+  	 * into an inline sequence of instructions.
+Only in ../generic: tclInterp.c~
+diff -p ../../tcl-9-0-3/generic/tclParse.c ../generic/tclParse.c
+*** ../../tcl-9-0-3/generic/tclParse.c	Mon Mar 23 11:29:49 2026
+--- ../generic/tclParse.c	Mon Mar 23 12:23:49 2026
+*************** Tcl_ParseCommand(
+*** 235,240 ****
+--- 235,260 ----
+      parsePtr->commentSize = 0;
+      parsePtr->commandStart = NULL;
+      parsePtr->commandSize = 0;
++ 
++     if (start[0] == '(' && start[numBytes-1] == ')') {
++ 	// math mode
++ 	parsePtr->commandStart = start;
++  	parsePtr->commandSize = numBytes;
++  	parsePtr->numWords =2;
++  	parsePtr->tokenPtr[0].type = TCL_TOKEN_SUB_EXPR;
++  	parsePtr->tokenPtr[0].numComponents=1;
++ 	parsePtr->tokenPtr[0].start = start;
++  	parsePtr->tokenPtr[0].size = 0;
++ 	TclGrowParseTokenArray(parsePtr, 1);
++ 	
++  	tokenPtr = &parsePtr->tokenPtr[1];
++  	tokenPtr->type = TCL_TOKEN_SIMPLE_WORD;
++  	tokenPtr->start = start;
++  	tokenPtr->size = numBytes;
++  	tokenPtr->numComponents=0;
++  	return TCL_OK;
++     }
++     
+      if (nested != 0) {
+  	terminators = TYPE_COMMAND_END | TYPE_CLOSE_BRACK;
+      } else {
+*************** ParseTokens(
+*** 1110,1115 ****
+--- 1130,1150 ----
+  	    }
+  	    src += parsePtr->tokenPtr[varToken].size;
+  	    numBytes -= parsePtr->tokenPtr[varToken].size;
++ 	} else if (numBytes>=2 && src[0] == '[' && src[1] == '(') {
++  	    /* Expression substition context */
++ 	    Tcl_Parse *exprParsePtr;
++ 	    exprParsePtr =(Tcl_Parse *)TclStackAlloc(parsePtr->interp, sizeof(Tcl_Parse));
++ 	    if (Tcl_ParseExpr(parsePtr->interp, src, numBytes, exprParsePtr) != TCL_OK) {
++ 		return TCL_ERROR;
++ 	    }
++ 	    
++ 	    tokenPtr->type = TCL_TOKEN_SUB_EXPR;
++ 	    tokenPtr->start = src;
++ 	    tokenPtr->size = exprParsePtr->commandSize+2;
++ 	    parsePtr->numTokens++;
++ 	    src+=exprParsePtr->commandSize+2;
++ 	    numBytes-=exprParsePtr->commandSize+2;
++ 	    TclStackFree(parsePtr->interp, exprParsePtr);
+  	} else if (*src == '[') {
+  	    Tcl_Parse *nestedPtr;
+  
+*************** TclSubstTokens(
+*** 2224,2230 ****
+  		adjust++;
+  	    }
+  	    break;
+! 
+  	case TCL_TOKEN_COMMAND: {
+  	    /* TIP #280: Transfer line information to nested command */
+  	    iPtr->numLevels++;
+--- 2259,2271 ----
+  		adjust++;
+  	    }
+  	    break;
+! 	case TCL_TOKEN_SUB_EXPR : {
+! 	    Tcl_Obj * expressionObj;
+!  	    expressionObj = Tcl_NewStringObj(tokenPtr->start+1, tokenPtr->size-2);
+!  	    code = Tcl_ExprObj(interp, expressionObj, &appendObj);
+!  	    Tcl_DecrRefCount(expressionObj);
+!  	    break;
+! 	}
+  	case TCL_TOKEN_COMMAND: {
+  	    /* TIP #280: Transfer line information to nested command */
+  	    iPtr->numLevels++;
+diff -p ../../tcl-9-0-3/generic/tclVar.c ../generic/tclVar.c
+*** ../../tcl-9-0-3/generic/tclVar.c	Mon Mar 23 11:29:50 2026
+--- ../generic/tclVar.c	Mon Mar 23 13:12:25 2026
+*************** TclLookupArrayElement(
+*** 1077,1082 ****
+--- 1077,1091 ----
+      int isNew;
+      Var *varPtr;
+  
++     Tcl_Size len;
++     char *bytes;
++ 
++     bytes = Tcl_GetStringFromObj(elNamePtr, &len);
++     if (bytes[0] == '(' && bytes[len-1] == ')' ) {
++ 	Tcl_ExprObj(interp, elNamePtr, &elNamePtr);
++ 	bytes = Tcl_GetStringFromObj(elNamePtr, &len);
++     }
++     
+      /*
+       * We're dealing with an array element. Make sure the variable is an array
+       * and look up the element (create the element if desired).
