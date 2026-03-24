@@ -90,12 +90,12 @@ proc matrix::map M {
 
 proc matrix::transpose {M} {
     # matrix map retourne un dictionnaire dont les cles sont dim et map
-    lmap {var val} [matrix map $M] {($var = $val)}
+    foreach {var val} [matrix map $M] {($var = $val)}
    
     if {1 in $dim} { return [vector transpose $M] }\
 	elseif {[llength $dim] > 2} { error -message "$M n'est pas une matrice"}\
 	else {
-	    lmap r $map R $M {     lmap var $r val $R {( $var = $val )}   }
+	    foreach r $map R $M {     foreach var $r val $R {( $var = $val )}   }
 	    return [switch $dim {
     	        {2 2} {(   ($a, $c), ($b, $d)   )}
     	        {3 2} {(   ($a, $c, $e) , ($b, $d, $f)   )}
@@ -193,7 +193,7 @@ proc matrix::comatrix {M} {
     return [switch $dim {
 	{3 3} {(
 	    ($e*$i - $f*$h, $f*$g - $d*$i, $d*$h - $e*$g),
-                 ($c*$h - $b*$i, $a*$i - $c*$g, $b*$g - $a*$h),
+        ($c*$h - $b*$i, $a*$i - $c*$g, $b*$g - $a*$h),
 	    ($b*$f - $c*$e, $c*$d - $a*$f, $a*$e - $b*$d)
 	)}
     }]
@@ -215,7 +215,7 @@ puts inverse:[matrix inverse {{1 2 5} {4 5 6} {7 8 9}}]
 
 proc tcl::mathfunc::if {args} { tailcall ::if {*}$args }
 proc tcl::mathfunc::for {args} { tailcall ::for {*}$args }
-proc tcl::mathfunc::while {args} { tailcall ::for {*}$args }
+proc tcl::mathfunc::while {args} { tailcall ::while {*}$args }
 proc tcl::mathfunc::variable {args} { tailcall ::variable {*}$args }
 
 expr {
@@ -237,7 +237,9 @@ proc ::math::special::J1/2 {x} {(
     # This Bessel function can be expressed in terms of elementary
     # functions. Therefore use the explicit formula
     #
-     if( $x != 0.0, {( sqrt(2.0/$pi/$x)*sin($x) )}, {( 0.0 )})
+     if( $x != 0.0, 
+	 	{( sqrt(2.0/$pi/$x)*sin($x) )}, 
+		{( 0.0 )})
 )}
 
 puts J1/2:[::math::special::J1/2 3]
@@ -281,15 +283,15 @@ proc integralSH { begin end nosteps func } {(
     xval = $begin;
     func_end = [uplevel 1 [($func, $xval)]];
     for({(i=1)},{$i <= $nosteps },{ incr i },{(
-	func_begin = $func_end;
-	func_middle = [uplevel 1 [($func, $xval+$hdelta)]];
-	func_end = [uplevel 1 [($func, $xval+$delta)]];
-	result = $result+$func_begin+4.0*$func_middle+$func_end;
-	xval = $begin+double($i)*$delta
+		func_begin = $func_end;
+		func_middle = [uplevel 1 [($func, $xval+$hdelta)]];
+		func_end = [uplevel 1 [($func, $xval+$delta)]];
+		result = $result+$func_begin+4.0*$func_middle+$func_end;
+		xval = $begin+double($i)*$delta
 	)});
 
     $result*$delta/6.0
-    )}
+)}
 
 proc integralSH5 { begin end nosteps func } {
     expr {
@@ -298,9 +300,9 @@ proc integralSH5 { begin end nosteps func } {
 	  result = 0.0;
 	  xval = $begin;
 	  func_end = [uplevel 1 [list $func $xval]]
-      }
+    }
     for {(i=1)} {$i <= $nosteps } {(i=$i+1)} {
-	expr {
+		expr {
 	      func_begin = $func_end;
 	      func_middle = [uplevel 1 [list $func [expr {$xval+$hdelta}]]];
 	      func_end = [uplevel 1 [list $func [expr {$xval+$delta}]]];
